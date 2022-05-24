@@ -1,4 +1,5 @@
-﻿using System;
+﻿using RestSharp;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,8 +26,8 @@ namespace WooCommerceNET
 
         protected Func<string, string> jsonSeFilter;
         protected Func<string, string> jsonDeseFilter;
-        protected Action<HttpWebRequest> webRequestFilter;
-        protected Action<HttpWebResponse> webResponseFilter;
+        protected Action<RestRequest> webRequestFilter;
+        protected Action<RestResponse> webResponseFilter;
 
         /// <summary>
         /// For Wordpress REST API with OAuth 1.0 ONLY
@@ -51,9 +52,9 @@ namespace WooCommerceNET
         public Func<string, string> JWTDeserializeFilter { get; set; }
 
         /// <summary>
-        /// Provide a function to modify the HttpWebRequest object, this is for JWT Token ONLY!
+        /// Provide a function to modify the RestRequest object, this is for JWT Token ONLY!
         /// </summary>
-        public Action<HttpWebRequest> JWTRequestFilter { get; set; }
+        public Action<RestRequest> JWTRequestFilter { get; set; }
 
         /// <summary>
         /// If running in Debug mode, default is False.
@@ -78,8 +79,8 @@ namespace WooCommerceNET
         public RestAPI(string url, string key, string secret, bool authorizedHeader = true,
                             Func<string, string> jsonSerializeFilter = null,
                             Func<string, string> jsonDeserializeFilter = null,
-                            Action<HttpWebRequest> requestFilter = null,
-                            Action<HttpWebResponse> responseFilter = null)//, bool useProxy = false)
+                            Action<RestRequest> requestFilter = null,
+                            Action<RestResponse> responseFilter = null)//, bool useProxy = false)
         {
             if (string.IsNullOrEmpty(url))
                 throw new Exception("Please use a valid WooCommerce Restful API url.");
@@ -151,7 +152,9 @@ namespace WooCommerceNET
         /// <returns>json string</returns>
         public virtual async Task<string> SendHttpClientRequest<T>(string endpoint, RequestMethod method, T requestBody, Dictionary<string, string> parms = null)
         {
-            HttpWebRequest httpWebRequest = null;
+            var client = new RestSharp.RestClient();
+            RestRequest restRequest = null;
+            RestResponse response = null;
             try
             {
                 if (Version == APIVersion.WordPressAPI)
@@ -162,24 +165,20 @@ namespace WooCommerceNET
 
                 if ((Version == APIVersion.WordPressAPIJWT || WCAuthWithJWT) && JWT_Object == null)
                 {
-                    HttpWebRequest request = (HttpWebRequest)WebRequest.Create(wc_url.Replace("wp/v2", "jwt-auth/v1/token")
-                                                                                        .Replace("wc/v1", "jwt-auth/v1/token")
-                                                                                        .Replace("wc/v2", "jwt-auth/v1/token")
-                                                                                        .Replace("wc/v3", "jwt-auth/v1/token"));
-                    request.Method = "POST";
-                    request.ContentType = "application/x-www-form-urlencoded";
+                    var request = new RestRequest(wc_url.Replace("wp/v2", "jwt-auth/v1/token")
+                                                                    .Replace("wc/v1", "jwt-auth/v1/token")
+                                                                    .Replace("wc/v2", "jwt-auth/v1/token")
+                                                                    .Replace("wc/v3", "jwt-auth/v1/token"));
+                    request.Method = Method.Post;
+                    request.AddHeader("ContentType", "application/x-www-form-urlencoded");
 
                     if (JWTRequestFilter != null)
                         JWTRequestFilter.Invoke(request);
 
                     var buffer = Encoding.UTF8.GetBytes($"username={wc_key}&password={WebUtility.UrlEncode(wc_secret)}");
-                    using (Stream dataStream = await request.GetRequestStreamAsync().ConfigureAwait(false))
-                    {
-                        dataStream.Write(buffer, 0, buffer.Length);
-                    }
-                    WebResponse response = await request.GetResponseAsync().ConfigureAwait(false);
-                    Stream resStream = response.GetResponseStream();
-                    string result = await GetStreamContent(resStream, "UTF-8").ConfigureAwait(false);
+                    
+                    response = await client.ExecuteAsync(request);
+                    string result = response.Content;
 
                     if (JWTDeserializeFilter != null)
                         result = JWTDeserializeFilter.Invoke(result);
@@ -191,11 +190,11 @@ namespace WooCommerceNET
                 {
                     if (AuthorizedHeader == true)
                     {
-                        httpWebRequest = (HttpWebRequest)WebRequest.Create(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
+                        restRequest = new RestRequest(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
                         if (WCAuthWithJWT && JWT_Object != null)
-                            httpWebRequest.Headers["Authorization"] = "Bearer " + JWT_Object.token;
+                            restRequest.AddOrUpdateHeader("Authorization", "Bearer " + JWT_Object.token);
                         else
-                            httpWebRequest.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.GetEncoding("ISO-8859-1").GetBytes(wc_key + ":" + wc_secret));
+                            restRequest.AddOrUpdateHeader("Authorization", "Basic " + Convert.ToBase64String(Encoding.GetEncoding("ISO-8859-1").GetBytes(wc_key + ":" + wc_secret)));
                     }
                     else
                     {
@@ -207,22 +206,22 @@ namespace WooCommerceNET
                         if (!parms.ContainsKey("consumer_secret"))
                             parms.Add("consumer_secret", wc_secret);
 
-                        httpWebRequest = (HttpWebRequest)WebRequest.Create(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
+                        restRequest = new RestRequest(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
                     }
                 }
                 else
                 {
-                    httpWebRequest = (HttpWebRequest)WebRequest.Create(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
+                    restRequest = new RestRequest(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
                     if (Version == APIVersion.WordPressAPIJWT)
-                        httpWebRequest.Headers["Authorization"] = "Bearer " + JWT_Object.token;
+                        restRequest.AddOrUpdateHeader("Authorization", "Bearer " + JWT_Object.token);
                 }
 
                 // start the stream immediately
-                httpWebRequest.Method = method.ToString();
-                httpWebRequest.AllowReadStreamBuffering = false;
+                string methodName = char.ToUpper(method.ToString()[0]) + method.ToString().Substring(1).ToLower();
+                restRequest.Method = (Method) Enum.Parse(typeof(Method), methodName);
 
                 if (webRequestFilter != null)
-                    webRequestFilter.Invoke(httpWebRequest);
+                    webRequestFilter.Invoke(restRequest);
 
                 //if (wc_Proxy)
                 //    httpWebRequest.Proxy.Credentials = CredentialCache.DefaultCredentials;
@@ -231,12 +230,7 @@ namespace WooCommerceNET
 
                 if (requestBody != null && requestBody.GetType() != typeof(string))
                 {
-                    httpWebRequest.ContentType = "application/json";
-                    var buffer = Encoding.UTF8.GetBytes(SerializeJSon(requestBody));
-                    using (Stream dataStream = await httpWebRequest.GetRequestStreamAsync().ConfigureAwait(false))
-                    {
-                        dataStream.Write(buffer, 0, buffer.Length);
-                    }
+                    restRequest.AddBody(SerializeJSon(requestBody), "application/json");
                 }
                 else
                 {
@@ -244,49 +238,29 @@ namespace WooCommerceNET
                     {
                         if (requestBody.ToString() == "fileupload")
                         {
-                            httpWebRequest.Headers["Content-Disposition"] = $"form-data; filename=\"{parms["name"]}\"";
-                            httpWebRequest.ContentType = "application/x-www-form-urlencoded";
+                            restRequest.AddOrUpdateHeader("ContentType", "application/x-www-form-urlencoded");
 
-                            using (Stream dataStream = await httpWebRequest.GetRequestStreamAsync().ConfigureAwait(false))
-                            {
-                                FileStream fileStream = new FileStream(parms["path"], FileMode.Open, FileAccess.Read);
-                                byte[] buffer = new byte[4096];
-                                int bytesRead = 0;
-
-                                while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) != 0)
-                                {
-                                    dataStream.Write(buffer, 0, bytesRead);
-                                }
-                                fileStream.Close();
-                            }
+                            restRequest.AddParameter($"filename=\"{parms["name"]}\"", File.ReadAllBytes(parms["path"]), ParameterType.RequestBody);
                         }
                         else
                         {
-                            httpWebRequest.ContentType = "application/json";
-                            var buffer = Encoding.UTF8.GetBytes(requestBody.ToString());
-                            using (Stream dataStream = await httpWebRequest.GetRequestStreamAsync().ConfigureAwait(false))
-                            {
-                                dataStream.Write(buffer, 0, buffer.Length);
-                            }
+                            restRequest.AddBody(SerializeJSon(requestBody), "application/json");
                         }
                     }
                 }
 
                 // asynchronously get a response
-                WebResponse wr = await httpWebRequest.GetResponseAsync().ConfigureAwait(false);
+                response = await client.ExecuteAsync(restRequest);
 
                 if (webResponseFilter != null)
-                    webResponseFilter.Invoke((HttpWebResponse)wr);
+                    webResponseFilter.Invoke(response);
 
-                return await GetStreamContent(wr.GetResponseStream(), wr.ContentType.Contains("=") ? wr.ContentType.Split('=')[1] : "UTF-8").ConfigureAwait(false);
+                return response.Content;
             }
             catch (WebException we)
             {
-                if (httpWebRequest != null && httpWebRequest.HaveResponse)
-                    if (we.Response != null)
-                        throw new WebException(await GetStreamContent(we.Response.GetResponseStream(), we.Response.ContentType.Contains("=") ? we.Response.ContentType.Split('=')[1] : "UTF-8").ConfigureAwait(false), we.InnerException, we.Status, we.Response);
-                    else
-                        throw we;
+                if (we.Response != null)
+                    throw new WebException(await GetStreamContent(we.Response.GetResponseStream(), we.Response.ContentType.Contains("=") ? we.Response.ContentType.Split('=')[1] : "UTF-8").ConfigureAwait(false), we.InnerException, we.Status, we.Response);
                 else
                     throw we;
             }
