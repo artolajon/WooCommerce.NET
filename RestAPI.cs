@@ -191,6 +191,7 @@ namespace WooCommerceNET
                     if (AuthorizedHeader == true)
                     {
                         restRequest = new RestRequest(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
+                        restRequest.RequestFormat = DataFormat.Json;
                         if (WCAuthWithJWT && JWT_Object != null)
                             restRequest.AddOrUpdateHeader("Authorization", "Bearer " + JWT_Object.token);
                         else
@@ -207,11 +208,13 @@ namespace WooCommerceNET
                             parms.Add("consumer_secret", wc_secret);
 
                         restRequest = new RestRequest(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
+                        restRequest.RequestFormat = DataFormat.Json;
                     }
                 }
                 else
                 {
                     restRequest = new RestRequest(wc_url + GetOAuthEndPoint(method.ToString(), endpoint, parms));
+                    restRequest.RequestFormat = DataFormat.Json;
                     if (Version == APIVersion.WordPressAPIJWT)
                         restRequest.AddOrUpdateHeader("Authorization", "Bearer " + JWT_Object.token);
                 }
